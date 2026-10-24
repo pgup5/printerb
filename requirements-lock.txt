@@ -1,0 +1,4 @@
+charset-normalizer==3.5.2
+pillow==13.0.0
+pyserial==3.5
+reportlab==5.1.0
