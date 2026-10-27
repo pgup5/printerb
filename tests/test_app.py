@@ -6,6 +6,32 @@ from printerb_core import b1_label_printer as b1
 
 
 class StandaloneTests(unittest.TestCase):
+    def test_direct_buttons_print_all_formats_without_child_windows(self):
+        with patch.object(b1, "available_serial_ports", return_value=[]):
+            app = PrinterApp()
+        app.withdraw()
+        try:
+            data = dict(name="王小明", number="123456", id="A123456789",
+                        birthday="2020/05/20", carrier="/ABC1234")
+            data.update(b1._sample_data())
+            for key, value in data.items():
+                if key in app.fields:
+                    app.fields[key].set(value)
+            app.text.insert("1.0", "收集檢體")
+            with patch.object(app, "start_job", side_effect=lambda action: action()), patch.object(b1, "print_image", return_value="COM7") as printer, patch("main.tk.Toplevel") as child:
+                for kind in LABELS:
+                    with self.subTest(kind=kind):
+                        app.label_buttons[kind].invoke()
+                        self.assertEqual(app.kind.get(), kind)
+                        self.assertEqual(printer.call_args.args[0].size, b1.LABEL_SIZE)
+                self.assertEqual(printer.call_count, len(LABELS))
+                app.events.put((True, {"battery": 90}, True))
+                app.poll()
+                self.assertIn('"battery": 90', app.diagnostic_output.get("1.0", "end"))
+                child.assert_not_called()
+        finally:
+            app.destroy()
+
     def test_all_label_types_render_without_printer(self):
         data = {key: "" for key, _ in FIELDS}
         data.update(name="王小明", number="123456", id="A123456789",

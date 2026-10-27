@@ -10,6 +10,7 @@ from printerb_core import b1_label_printer as b1
 
 
 LABELS = ("姓名／生日／身分證", "病歷號條碼", "姓名貼（六格）", "手機條碼", "收集標籤", "尿液小單", "自訂文字", "生長數據")
+LABEL_ACTIONS = tuple(zip(("列印姓名生日", "快篩條碼", "姓名貼", "手機條碼", "收集", "開驗尿單", "TEXT", "生長數據"), LABELS))
 FIELDS = (
     ("name", "姓名"), ("number", "病歷號"), ("id", "身分證字號"),
     ("birthday", "生日（西元 YYYY/MM/DD）"), ("carrier", "手機條碼（例如 /ABC1234）"),
@@ -46,8 +47,8 @@ class PrinterApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("PrinterB · NIIMBOT B1")
-        self.geometry("1000x760")
-        self.minsize(900, 700)
+        self.geometry("1100x900")
+        self.minsize(1000, 850)
         self.option_add("*Font", ("Microsoft JhengHei UI", 10))
         self.events = queue.Queue()
         self.busy = False
@@ -75,26 +76,35 @@ class PrinterApp(tk.Tk):
         ttk.Label(settings, text="濃度").grid(row=0, column=3, padx=5)
         ttk.Spinbox(settings, from_=1, to=5, textvariable=self.density, width=4).grid(row=0, column=4)
         ttk.Button(settings, text="讀取診斷", command=self.diagnose).grid(row=0, column=5, padx=10)
+        actions = ttk.LabelFrame(self, text="直接列印一張（使用下方資料）", padding=8)
+        actions.pack(fill="x", padx=16, pady=(10, 0))
+        self.label_buttons = {}
+        for index, (label, kind) in enumerate(LABEL_ACTIONS):
+            button = ttk.Button(actions, text=label, command=lambda selected=kind: self.print_kind(selected))
+            button.grid(row=index // 4, column=index % 4, sticky="ew", padx=4, pady=4)
+            actions.columnconfigure(index % 4, weight=1)
+            self.label_buttons[kind] = button
         body = ttk.Frame(self, padding=16)
         body.pack(fill="both", expand=True)
         left = ttk.Frame(body)
         left.pack(side="left", fill="both", expand=True, padx=(0, 16))
         ttk.Label(left, text="標籤種類").pack(anchor="w")
-        selector = ttk.Combobox(left, textvariable=self.kind, values=LABELS, state="readonly")
+        selector = ttk.Frame(left)
         selector.pack(fill="x", pady=(4, 10))
-        selector.bind("<<ComboboxSelected>>", lambda _: self.update_inputs())
-        self.tabs = ttk.Notebook(left)
-        self.tabs.pack(fill="both", expand=True)
-        patient = ttk.Frame(self.tabs, padding=10)
-        growth = ttk.Frame(self.tabs, padding=10)
-        self.tabs.add(patient, text="病人資料")
-        self.tabs.add(growth, text="生長數據")
+        for index, (label, kind) in enumerate(LABEL_ACTIONS):
+            ttk.Radiobutton(selector, text=label, variable=self.kind, value=kind,
+                            command=self.update_inputs).grid(row=index // 4, column=index % 4, sticky="w", padx=3, pady=3)
+        patient = ttk.LabelFrame(left, text="病人資料", padding=6)
+        patient.pack(fill="x")
+        growth = ttk.LabelFrame(left, text="生長數據", padding=6)
+        growth.pack(fill="x", pady=(6, 0))
         for index, (key, label) in enumerate(FIELDS):
             panel = patient if index < 5 else growth
-            row = index if index < 5 else index - 5
-            ttk.Label(panel, text=label).grid(row=row, column=0, sticky="w", pady=5)
-            ttk.Entry(panel, textvariable=self.fields[key], width=22).grid(row=row, column=1, sticky="ew", padx=(8, 0), pady=5)
-            panel.columnconfigure(1, weight=1)
+            offset = index if index < 5 else index - 5
+            row, column = offset // 2, (offset % 2) * 2
+            ttk.Label(panel, text=label).grid(row=row, column=column, sticky="w", pady=5)
+            ttk.Entry(panel, textvariable=self.fields[key], width=14).grid(row=row, column=column + 1, sticky="ew", padx=(8, 6), pady=5)
+            panel.columnconfigure(column + 1, weight=1)
         self.text_label = ttk.Label(left, text="自訂文字／收集原因（可換行）")
         self.text_label.pack(anchor="w", pady=(12, 4))
         self.text = tk.Text(left, height=4, wrap="word", relief="solid", borderwidth=1)
@@ -108,17 +118,16 @@ class PrinterApp(tk.Tk):
         ttk.Label(right, text="沿用原專案 B1 字型、版面及列印協定。\n生長百分位與 BMI 由使用者填入。", justify="left").pack(anchor="w", pady=6)
         for label, command in (("預覽", self.show_preview), ("儲存 PNG", self.save_png), ("列印一張", self.print_label)):
             ttk.Button(right, text=label, command=command).pack(fill="x", pady=5)
+        ttk.Label(right, text="診斷結果（不列印）").pack(anchor="w", pady=(12, 4))
+        self.diagnostic_output = tk.Text(right, width=48, height=8, wrap="word", state="disabled")
+        self.diagnostic_output.pack(fill="both", expand=True)
         ttk.Separator(self).pack(fill="x")
         ttk.Label(self, textvariable=self.status, padding=10).pack(fill="x")
         self.update_inputs()
 
     def update_inputs(self):
-        if self.kind.get() == LABELS[7]:
-            self.tabs.select(1)
-        else:
-            self.tabs.select(0)
         self.text_label.configure(text="收集原因（必填，可換行）" if self.kind.get() == LABELS[4] else "自訂文字（可換行）")
-        self.text.configure(state="normal" if self.kind.get() in (LABELS[4], LABELS[6]) else "disabled")
+        self.text.configure(state="normal")
         self.preview.delete("all")
         self.preview.create_text(200, 140, text="按「預覽」查看目前資料", fill="#526070")
 
@@ -173,6 +182,14 @@ class PrinterApp(tk.Tk):
                 self.events.put((False, str(exc), diagnostic))
         threading.Thread(target=worker, daemon=True).start()
 
+    def print_kind(self, kind):
+        """Print a label directly from its main-window action button."""
+        if self.busy:
+            return
+        self.kind.set(kind)
+        self.update_inputs()
+        self.print_label()
+
     def print_label(self):
         if self.busy:
             return
@@ -204,10 +221,9 @@ class PrinterApp(tk.Tk):
                 if not ok:
                     messagebox.showerror("印表機", result, parent=self)
                 elif diagnostic:
-                    window = tk.Toplevel(self)
-                    window.title("B1 診斷（不列印）")
-                    output = tk.Text(window, width=80, height=26, wrap="word")
-                    output.pack(fill="both", expand=True)
+                    output = self.diagnostic_output
+                    output.configure(state="normal")
+                    output.delete("1.0", "end")
                     output.insert("1.0", json.dumps(result, ensure_ascii=False, indent=2, default=str))
                     output.configure(state="disabled")
         except queue.Empty:
