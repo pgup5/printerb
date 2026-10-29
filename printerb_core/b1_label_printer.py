@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from datetime import date
 import logging
 import math
+import sys
 from pathlib import Path
 import re
 import struct
@@ -59,6 +60,9 @@ logger = logging.getLogger(__name__)
 _AGE_PATTERN = re.compile(r"^(\d+)y(\d+)m$", re.IGNORECASE)
 _NIIMBOT_HINTS = ("niimbot", "b1", "usb serial", "ch340", "cp210", "wch")
 _FONT_CANDIDATES = (
+    Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+    Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"),
+    Path("/usr/share/fonts/truetype/arphic/ukai.ttc"),
     Path(r"C:\Windows\Fonts\msjh.ttc"),
     Path(r"C:\Windows\Fonts\msjhbd.ttc"),
     Path(r"C:\Windows\Fonts\mingliu.ttc"),
@@ -124,7 +128,8 @@ def find_niimbot_port(port: str | None = None) -> str:
     )
     raise PrinterNotFoundError(
         "Could not choose the NIIMBOT port uniquely. "
-        f"Detected: {descriptions}. Pass port='COMx' explicitly."
+        f"Detected: {descriptions}. Select a port explicitly "
+        "(for example /dev/ttyUSB0 on Linux or COM4 on Windows)."
     )
 
 
@@ -227,12 +232,16 @@ def _load_chinese_font(size: int) -> ImageFont.FreeTypeFont:
     for font_path in _FONT_CANDIDATES:
         if font_path.is_file():
             try:
-                return ImageFont.truetype(str(font_path), size=size, index=0)
+                return ImageFont.truetype(
+                    str(font_path), size=size,
+                    index=3 if font_path.name.startswith("NotoSansCJK-") else 0,
+                )
             except OSError:
                 continue
     raise LabelPrinterError(
-        "No Traditional Chinese font was found. Expected Microsoft JhengHei "
-        r"at C:\Windows\Fonts\msjh.ttc or another supported Windows Chinese font."
+        "No Traditional Chinese font was found. On Linux Mint install "
+        "fonts-noto-cjk (sudo apt install fonts-noto-cjk). "
+        "On Windows install Microsoft JhengHei."
     )
 
 
@@ -496,29 +505,31 @@ def _fit_centered_label_font(draw, text: str, max_width: int, max_size: int):
 
 
 def render_name_sticker(name: object) -> Image.Image:
-    """Fit six Kai-script name rows on a portrait label, rotated clockwise."""
+    """Fit five spaced name rows, preferring Kai script, rotated clockwise."""
     text = str(name or "").strip()
     if not text or "\n" in text or "\r" in text:
         raise ValueError("請輸入單行姓名。")
-    font_path = Path(r"C:\Windows\Fonts\kaiu.ttf")
-    if not font_path.is_file():
-        raise LabelPrinterError("找不到標楷體：C:\\Windows\\Fonts\\kaiu.ttf")
+    kai_paths = (Path("/usr/share/fonts/truetype/arphic/ukai.ttc"),
+                 Path(r"C:\Windows\Fonts\kaiu.ttf"))
+    font_path = next((path for path in kai_paths if path.is_file()), None)
     width, height = LABEL_SIZE[1], LABEL_SIZE[0]
     image = Image.new("1", (width, height), color=1)
     draw = ImageDraw.Draw(image)
     margin = 8
-    row_height = (height - 2 * margin) / 6
+    copies, gap = 5, 16
+    row_height = (height - 2 * margin - (copies - 1) * gap) / copies
     for size in range(height, 0, -1):
-        font = ImageFont.truetype(str(font_path), size=size)
+        font = (ImageFont.truetype(str(font_path), size=size)
+                if font_path else _load_chinese_font(size))
         bbox = draw.textbbox((0, 0), text, font=font)
         text_width, text_height = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        if text_width <= width - 2 * margin and text_height <= row_height - 8:
+        if text_width <= width - 2 * margin and text_height <= row_height:
             break
     else:
         raise LabelPrinterError("姓名太長，無法放入標籤。")
-    for row in range(6):
+    for row in range(copies):
         x = (width - text_width) / 2 - bbox[0]
-        y = margin + row * row_height + (row_height - text_height) / 2 - bbox[1]
+        y = margin + row * (row_height + gap) + (row_height - text_height) / 2 - bbox[1]
         draw.text((round(x), round(y)), text, font=font, fill=0)
     return image.transpose(Image.Transpose.ROTATE_270)
 
@@ -527,7 +538,7 @@ def print_name_sticker(
     name: object, *, port: str | None = None, density: int = DEFAULT_DENSITY,
     extra_feed_mm: float = 0,
 ) -> str:
-    """Print one label containing six rotated copies of the entered name."""
+    """Print one label containing five spaced, rotated copies of the entered name."""
     return print_image(render_name_sticker(name), port=port, density=density, extra_feed_mm=extra_feed_mm)
 
 
@@ -542,7 +553,7 @@ def print_name_birthday_label(
     user_data: Mapping[str, object], *, port: str | None = None, density: int = DEFAULT_DENSITY,
     extra_feed_mm: float = 0,
 ) -> str:
-    """Render and print the patient name, ID, and ROC birthday."""
+    """Render and print the patient name, ID, and Gregorian birthday as entered."""
     image = render_name_birthday_label(user_data.get("name"), user_data.get("birthday"), user_data.get("id"))
     return print_image(image, port=port, density=density, extra_feed_mm=extra_feed_mm)
 
@@ -614,10 +625,19 @@ def print_name_mrn_barcode_label(
     return print_image(image, port=port, density=density, extra_feed_mm=extra_feed_mm)
 
 
-def render_text_label(text) -> Image.Image:
+def render_text_label(text, *, font_family="黑體") -> Image.Image:
     from .text_label import render_text_label as render
 
-    return render(text, size=LABEL_SIZE, margins=(32, 8, 8, 8), font_loader=_load_chinese_font)
+    font_loader = _load_chinese_font
+    if font_family == "標楷體":
+        paths = (Path(r"C:\Windows\Fonts\kaiu.ttf"),
+                 Path(__file__).parent / "fonts" / "ukai.ttc",
+                 Path("/usr/share/fonts/truetype/arphic/ukai.ttc"))
+        font_path = next((path for path in paths if path.is_file()), None)
+        if font_path is None:
+            raise LabelPrinterError("找不到標楷體，請安裝標楷體或 AR PL UKai 字型。")
+        font_loader = lambda size: ImageFont.truetype(str(font_path), size=size)
+    return render(text, size=LABEL_SIZE, margins=(32, 8, 8, 8), font_loader=font_loader)
 
 
 def print_text_label(text, *, port=None, density=DEFAULT_DENSITY, extra_feed_mm=0) -> str:
@@ -697,7 +717,12 @@ class _B1Client:
         try:
             self.connection = serial.Serial(port=port, baudrate=115200, timeout=0.5)
         except (OSError, serial.SerialException) as exc:
-            raise PrinterCommunicationError(f"Could not open NIIMBOT on {port}: {exc}") from exc
+            hint = (" On Linux Mint, check device permissions: add your user to "
+                    "the dialout group, then log out and back in (see README.md)."
+                    if sys.platform.startswith("linux") and
+                    (isinstance(exc, PermissionError) or getattr(exc, "errno", None) == 13
+                     or "Permission denied" in str(exc)) else "")
+            raise PrinterCommunicationError(f"Could not open NIIMBOT on {port}: {exc}.{hint}") from exc
         self._buffer = bytearray()
 
     def close(self) -> None:
@@ -910,7 +935,7 @@ def print_image(
     image: Image.Image, *, port: str | None = None, density: int = DEFAULT_DENSITY,
     extra_feed_mm: float = 0,
 ) -> str:
-    """Print one image and return the selected COM port."""
+    """Print one image and return the selected serial port."""
     if image.size != LABEL_SIZE:
         raise ValueError(f"Expected a {LABEL_SIZE[0]} x {LABEL_SIZE[1]} image, got {image.size}.")
     if density not in range(1, 6):
@@ -953,7 +978,7 @@ def print_growth_label(
     examination_date: date | None = None,
     extra_feed_mm: float = 0,
 ) -> str:
-    """Render and print one growth label; return the selected COM port."""
+    """Render and print one growth label; return the selected serial port."""
     image = render_growth_label(user_data, examination_date=examination_date)
     return print_image(image, port=port, density=density, extra_feed_mm=extra_feed_mm)
 
@@ -992,13 +1017,13 @@ def main(argv: list[str] | None = None) -> int:
         dest="send_to_printer",
         help="send the generated image(s) to the NIIMBOT printer",
     )
-    parser.add_argument("--port", help="explicit serial port, for example COM4")
+    parser.add_argument("--port", help="explicit serial port, for example /dev/ttyUSB0 or COM4")
     parser.add_argument(
         "--test-pattern",
         action="store_true",
         help="render a font-independent B1 alignment pattern instead of a growth label",
     )
-    parser.add_argument("--name-sticker", help="render six rotated Kai-script copies of this name")
+    parser.add_argument("--name-sticker", help="render five spaced, rotated Kai-script copies of this name")
     parser.add_argument("--preview", type=Path, help="output path for the rendered image")
     args = parser.parse_args(argv)
 

@@ -1,12 +1,13 @@
-"""Patient fields: 40% name, 10% blank, 25% ID, 25% birthday."""
+"""Patient fields: 50% name, 25% ID, 25% birthday."""
 
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageOps
 
 
 def format_birthday(birthday):
-    date = datetime.strptime(str(birthday).strip(), "%Y/%m/%d")
-    return f"民國{date.year - 1911}年{date.month}月{date.day}日"
+    text = str(birthday).strip()
+    datetime.strptime(text, "%Y/%m/%d")
+    return text
 
 
 def render(name, birthday, patient_id, *, size, margins, font_loader):
@@ -20,7 +21,7 @@ def render(name, birthday, patient_id, *, size, margins, font_loader):
     width, height = size[0] - left - right, size[1] - top - bottom
     image = Image.new("1", size, 1)
     draw = ImageDraw.Draw(image)
-    rows = ((0, height * 40 // 100),
+    rows = ((0, height // 2),
             (height // 2, height * 3 // 4),
             (height * 3 // 4, height))
     for index, text in enumerate(lines):

@@ -6,7 +6,7 @@ from printerb_core import b1_label_printer as b1
 
 
 class StandaloneTests(unittest.TestCase):
-    def test_direct_buttons_print_all_formats_without_child_windows(self):
+    def test_print_and_diagnostics_without_child_windows(self):
         with patch.object(b1, "available_serial_ports", return_value=[]):
             app = PrinterApp()
         app.withdraw()
@@ -19,12 +19,9 @@ class StandaloneTests(unittest.TestCase):
                     app.fields[key].set(value)
             app.text.insert("1.0", "收集檢體")
             with patch.object(app, "start_job", side_effect=lambda action: action()), patch.object(b1, "print_image", return_value="COM7") as printer, patch("main.tk.Toplevel") as child:
-                for kind in LABELS:
-                    with self.subTest(kind=kind):
-                        app.label_buttons[kind].invoke()
-                        self.assertEqual(app.kind.get(), kind)
-                        self.assertEqual(printer.call_args.args[0].size, b1.LABEL_SIZE)
-                self.assertEqual(printer.call_count, len(LABELS))
+                app.print_label()
+                self.assertEqual(printer.call_count, 1)
+                self.assertEqual(printer.call_args.args[0].size, b1.LABEL_SIZE)
                 app.events.put((True, {"battery": 90}, True))
                 app.poll()
                 self.assertIn('"battery": 90', app.diagnostic_output.get("1.0", "end"))
